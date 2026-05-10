@@ -1,6 +1,7 @@
 import importlib.util
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 
@@ -18,6 +19,14 @@ def parse_version_tuple(version):
     while len(numbers) < 4:
         numbers.append(0)
     return tuple(numbers)
+
+
+def read_project_metadata(project_dir):
+    pyproject_path = project_dir / "pyproject.toml"
+    if not pyproject_path.exists():
+        return {}
+    with pyproject_path.open("rb") as f:
+        return tomllib.load(f).get("project", {})
 
 
 def write_windows_version_file(
@@ -79,13 +88,15 @@ if __name__ == "__main__":
     entry_file = project_dir / "cc-model-switch.py"
     dist_dir = project_dir / "dist"
     build_dir = project_dir / "build"
+    project_metadata = read_project_metadata(project_dir)
 
     # Build metadata. Edit these directly.
-    app_name = "cc-model-switch"
-    app_version = "1.0.0"
+    app_name = project_metadata.get("name", "cc-model-switch")
+    app_version = project_metadata.get("version", "")
+    output_name = f"{app_name}-{app_version}" if app_version else app_name
     app_icon = "icon.ico"
     company_name = "CLN-Grated"
-    description = "Claude Code model switcher"
+    description = project_metadata.get("description", "Claude Code model switcher")
     product_name = app_name
     copyright_text = "(C) 2026 Ad_closeNN."
 
@@ -99,7 +110,7 @@ if __name__ == "__main__":
         "--clean",
         "--noupx",
         "--name",
-        app_name,
+        output_name,
         "--distpath",
         str(dist_dir),
         "--workpath",
@@ -137,10 +148,11 @@ if __name__ == "__main__":
         str(entry_file),
     ]
 
-    output_file = dist_dir / f"{app_name}.exe"
+    output_file = dist_dir / f"{output_name}.exe"
     print("构建信息:")
     print(f"  app_name: {app_name}")
     print(f"  app_version: {app_version or '-'}")
+    print(f"  output_name: {output_name}")
     print(f"  app_icon: {app_icon or '-'}")
     print(f"  company_name: {company_name or '-'}")
     print(f"  description: {description or '-'}")

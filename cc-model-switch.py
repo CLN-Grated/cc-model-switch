@@ -4,8 +4,14 @@ import json
 import os
 import sys
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROFILES_DIR = os.path.join(SCRIPT_DIR, "profiles")
+def get_app_dir():
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+APP_DIR = get_app_dir()
+PROFILES_DIR = os.path.join(APP_DIR, "profiles")
 SETTINGS_PATH = os.path.join(os.path.expanduser("~"), ".claude", "settings.json")
 
 IS_WINDOWS = os.name == "nt"
