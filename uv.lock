@@ -15,12 +15,16 @@ wheels = [
 name = "cc-model-switch"
 version = "1.1.1"
 source = { virtual = "." }
-dependencies = [
+
+[package.dev-dependencies]
+dev = [
     { name = "pyinstaller" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "pyinstaller", specifier = ">=6.20.0" }]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pyinstaller", specifier = ">=6.20.0" }]
 
 [[package]]
 name = "macholib"
