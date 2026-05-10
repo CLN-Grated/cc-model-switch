@@ -29,8 +29,9 @@ ENV_KEYS = [
 
 
 def load_profiles():
-    os.makedirs(PROFILES_DIR, exist_ok=True)
     profiles = []
+    if not os.path.isdir(PROFILES_DIR):
+        return profiles
     for f in sorted(os.listdir(PROFILES_DIR)):
         if f.endswith(".json"):
             path = os.path.join(PROFILES_DIR, f)
@@ -354,6 +355,7 @@ def create_profile():
         if confirm != "y":
             return None
 
+    os.makedirs(PROFILES_DIR, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(profile, f, indent=2, ensure_ascii=False)
         f.write("\n")
