@@ -1,8 +1,9 @@
 [project]
 name = "cc-model-switch"
 version = "1.1.1"
-description = "Switch Claude Code's model from templates."
+description = "Edit models in Claude Code profile more easily."
 requires-python = ">=3.12"
+readme="README.md"
 dependencies = [
     "pyinstaller>=6.20.0",
 ]
