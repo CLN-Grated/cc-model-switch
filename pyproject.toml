@@ -1,6 +1,6 @@
 [project]
 name = "cc-model-switch"
-version = "1.1.1"
+version = "1.2.1"
 description = "Edit models in Claude Code profile more easily."
 requires-python = ">=3.12"
 readme="README.md"

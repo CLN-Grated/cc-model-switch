@@ -1,5 +1,3 @@
-"""Claude Code 模型切换器 - 用方向键切换预设配置"""
-
 import json
 import os
 import sys
@@ -194,7 +192,7 @@ def draw_menu(profiles, index, current_index=None):
     if not profiles:
         sys.stdout.write("\033[90m暂无配置文件\033[0m\n")
         sys.stdout.write("\033[92m按 a 创建新配置文件\033[0m\n\n")
-        sys.stdout.write("\033[36ma 创建新配置文件  |  Ctrl+C / q 取消\033[0m\n")
+        sys.stdout.write("\033[36ma 新增  |  Ctrl+C / q 取消\033[0m\n")
         sys.stdout.flush()
         return
 
@@ -223,7 +221,7 @@ def draw_menu(profiles, index, current_index=None):
         sys.stdout.write(f"  \033[90m模型: {p.get('ANTHROPIC_MODEL', '-')}\033[0m\n\n")
     if len(profiles) > visible_count:
         sys.stdout.write(f"\033[90m显示 {start + 1}-{end} / {len(profiles)}\033[0m\n")
-    sys.stdout.write("\033[36m↑ ↓ 切换  |  Enter 确认  |  a 创建新配置文件  |  Ctrl+C / q 取消  |  绿色为当前使用\033[0m\n")
+    sys.stdout.write("\033[36m↑ ↓ 切换  |  Enter 确认  |  a 新增  |  e 编辑  |  Ctrl+C / q 取消  |  绿色为当前使用\033[0m\n")
     sys.stdout.flush()
 
 
@@ -279,6 +277,8 @@ def read_key():
             return "enter"
         if first == b"q":
             return "quit"
+        if first == b"e":
+            return "edit"
         if first == b"a":
             return "add"
         if first == b"\xe0":
@@ -308,6 +308,8 @@ def read_key():
                 return "quit"
             elif ch == "a":
                 return "add"
+            elif ch == "e":
+                return "edit"
             elif ch == "\x03":
                 return "ctrl-c"
             return "unknown"
@@ -363,6 +365,113 @@ def create_profile():
     return fname
 
 
+def confirm_edit_profile(old_profile, new_profile, old_fname, new_fname):
+    use_ime_english_mode()
+    sys.stdout.write("\033[H\033[J")
+    sys.stdout.write("\033[96m── 确认修改配置 ──\033[0m\n\n")
+
+    changes = []
+    old_name = old_profile.get("name", "")
+    new_name = new_profile.get("name", "")
+    if old_name != new_name:
+        changes.append(("name", old_name, new_name))
+
+    for key in ENV_KEYS:
+        old_val = old_profile.get(key, "")
+        new_val = new_profile.get(key, "")
+        if old_val != new_val:
+            changes.append(("env", key, old_val, new_val))
+
+    fname_changed = old_fname != new_fname
+
+    if not changes and not fname_changed:
+        sys.stdout.write("  \033[90m未检测到变更\033[0m\n\n")
+        sys.stdout.flush()
+        return True
+
+    for c in changes:
+        if c[0] == "name":
+            sys.stdout.write(f"  \033[93m名称:\033[0m {c[1]} \033[90m→\033[0m \033[92m{c[2]}\033[0m\n\n")
+
+    env_changes = [c for c in changes if c[0] == "env"]
+    if env_changes:
+        sys.stdout.write(f"  \033[93m字段变更:\033[0m\n")
+        for c in env_changes:
+            _, key, old_val, new_val = c
+            sys.stdout.write(f"    {key}:\n")
+            sys.stdout.write(f"      \033[90m{format_value(key, old_val)}\033[0m \033[36m→\033[0m \033[92m{format_value(key, new_val)}\033[0m\n")
+        sys.stdout.write("\n")
+
+    if fname_changed:
+        sys.stdout.write(f"  \033[93m文件名:\033[0m\n")
+        sys.stdout.write(f"    \033[90m{old_fname}\033[0m \033[36m→\033[0m \033[94m{new_fname}\033[0m\n\n")
+
+    sys.stdout.write("  \033[90m按 Enter 确认修改，输入其他内容返回菜单\033[0m")
+    sys.stdout.flush()
+    confirm = input().strip().lower()
+    return confirm == ""
+
+
+def edit_profile(profile):
+    sys.stdout.write("\033[H\033[J")
+    sys.stdout.write("\033[96m── 编辑配置文件 ──\033[0m\n\n")
+
+    old_fname = profile.get("_file", "")
+    new_profile = {}
+
+    name = prompt_input("名称", profile.get("name", ""))
+    if not name:
+        sys.stdout.write("\033[91m名称不能为空\033[0m\n")
+        sys.stdout.flush()
+        return None
+    new_profile["name"] = name
+
+    model_val = ""
+    for key in ENV_KEYS:
+        default = profile.get(key, "")
+        if model_val and key not in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"):
+            default = model_val
+        val = prompt_input(key, default)
+        if val:
+            new_profile[key] = val
+        if key == "ANTHROPIC_MODEL" and val:
+            model_val = val
+
+    old_base = old_fname[:-5] if old_fname.endswith(".json") else old_fname
+    fname = prompt_input("文件名", old_base)
+    if fname in (".", "..") or "/" in fname or "\\" in fname or fname != os.path.basename(fname):
+        sys.stdout.write("\033[91m文件名不能包含路径或 ..\033[0m\n")
+        sys.stdout.flush()
+        return None
+    if not fname.endswith(".json"):
+        fname += ".json"
+    if fname.lower() == old_fname.lower():
+        fname = old_fname
+
+    if not confirm_edit_profile(profile, new_profile, old_fname, fname):
+        return None
+
+    path = os.path.join(PROFILES_DIR, fname)
+    if fname != old_fname and os.path.exists(path):
+        confirm = prompt_input(f"{fname} 已存在，覆盖？(y/N)").lower()
+        if confirm != "y":
+            return None
+
+    os.makedirs(PROFILES_DIR, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(new_profile, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+
+    if fname != old_fname and old_fname:
+        try:
+            os.remove(os.path.join(PROFILES_DIR, old_fname))
+        except OSError as e:
+            sys.stdout.write(f"\033[93m警告: 旧文件删除失败: {e}\033[0m\n")
+            sys.stdout.flush()
+
+    return fname, old_fname
+
+
 def main():
     profiles = load_profiles()
 
@@ -412,6 +521,16 @@ def main():
             current_idx = next((i for i, p in enumerate(profiles) if all(current.get(k) == p.get(k) for k in keys)), None)
             if fname:
                 idx = next((i for i, p in enumerate(profiles) if p.get("_file") == fname), 0)
+            draw_menu(profiles, idx, current_idx)
+        elif key == "edit":
+            if not profiles:
+                continue
+            result = edit_profile(profiles[idx])
+            if result is not None:
+                new_fname, old_fname = result
+                profiles = load_profiles()
+                current_idx = next((i for i, p in enumerate(profiles) if all(current.get(k) == p.get(k) for k in keys)), None)
+                idx = next((i for i, p in enumerate(profiles) if p.get("_file") == new_fname), 0)
             draw_menu(profiles, idx, current_idx)
 
     if not profiles:
