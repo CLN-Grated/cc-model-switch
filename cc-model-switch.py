@@ -263,9 +263,9 @@ def confirm_profile(profile):
     print("\n  将应用的环境变量:")
     for key in ENV_KEYS:
         print(f"    {key}: {format_value(key, profile.get(key))}")
-    print()
-    confirm = input("  按 Enter 确认切换，输入其他内容返回菜单: ")
-    return confirm == ""
+    sys.stdout.write("\n  \033[90m按 Enter 确认切换，其他键取消\033[0m")
+    sys.stdout.flush()
+    return read_char() in ("\r", "\n")
 
 
 def read_key():
@@ -287,6 +287,8 @@ def read_key():
             return "add"
         if first == b"v":
             return "paste"
+        if first == b"\x1b":
+            return "quit"
         if first == b"\xe0":
             second = msvcrt.getch()
             if second == b"H":
@@ -310,12 +312,14 @@ def read_key():
             tty.setraw(fd)
             ch = sys.stdin.read(1)
             if ch == "\x1b":
-                seq = ch + sys.stdin.read(2)
-                if seq == "\x1b[A":
-                    return "up"
-                elif seq == "\x1b[B":
-                    return "down"
-                return "unknown"
+                import select
+                if select.select([sys.stdin], [], [], 0.1)[0]:
+                    seq = ch + sys.stdin.read(2)
+                    if seq == "\x1b[A":
+                        return "up"
+                    elif seq == "\x1b[B":
+                        return "down"
+                return "quit"
             elif ch == "\r" or ch == "\n":
                 return "enter"
             elif ch == "q":
@@ -335,33 +339,98 @@ def read_key():
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
-def prompt_input(label, default=""):
+def read_char():
+    if IS_WINDOWS:
+        import msvcrt
+        ch = msvcrt.getch()
+        if ch == b"\xe0":
+            msvcrt.getch()
+            return None
+        if ch == b"\x03":
+            raise KeyboardInterrupt
+        try:
+            return ch.decode("utf-8")
+        except UnicodeDecodeError:
+            return ch.decode("utf-8", errors="replace")
+    else:
+        import tty, termios
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            ch = sys.stdin.read(1)
+            if ch == "\x1b":
+                import select
+                if select.select([sys.stdin], [], [], 0.1)[0]:
+                    seq = ch + sys.stdin.read(2)
+                    if seq in ("\x1b[A", "\x1b[B"):
+                        return None
+                return "\x1b"
+            if ch == "\x03":
+                raise KeyboardInterrupt
+            return ch
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def prompt_input_esc(label, default=""):
     hint = f" [{default}]" if default else ""
-    val = input(f"  {label}{hint}: ").strip()
-    return val if val else default
+    sys.stdout.write(f"  {label}{hint}: ")
+    sys.stdout.flush()
+    buf = ""
+    while True:
+        ch = read_char()
+        if ch is None:
+            continue
+        if ch in ("\r", "\n"):
+            break
+        if ch == "\x1b":
+            return None
+        if ch in ("\x7f", "\x08"):
+            if buf:
+                buf = buf[:-1]
+                sys.stdout.write("\b \b")
+                sys.stdout.flush()
+        else:
+            buf += ch
+            sys.stdout.write(ch)
+            sys.stdout.flush()
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+    return buf if buf else default
+
+
+def confirm_esc(prompt_text=""):
+    if prompt_text:
+        sys.stdout.write(prompt_text)
+        sys.stdout.flush()
+    ch = read_char()
+    return ch in ("\r", "\n")
 
 
 def create_profile():
     sys.stdout.write("\033[H\033[J")
     sys.stdout.write("\033[96m── 创建新配置文件 ──\033[0m\n\n")
-    name = prompt_input("名称")
+    name = prompt_input_esc("名称")
     if not name:
-        sys.stdout.write("\033[91m名称不能为空\033[0m\n")
-        sys.stdout.flush()
         return None
 
     profile = {"name": name}
     model_val = ""
     for key in ENV_KEYS:
         default = model_val if model_val and key not in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN") else ""
-        val = prompt_input(key, default)
+        val = prompt_input_esc(key, default)
+        if val is None:
+            return None
         if val:
             profile[key] = val
         if key == "ANTHROPIC_MODEL" and val:
             model_val = val
 
     default_fname = name.lower().replace(" ", "-") + ".json"
-    fname = prompt_input("文件名", default_fname)
+    fname = prompt_input_esc("文件名", default_fname)
+    if fname is None:
+        return None
     if fname in (".", "..") or "/" in fname or "\\" in fname or fname != os.path.basename(fname):
         sys.stdout.write("\033[91m文件名不能包含路径或 ..\033[0m\n")
         sys.stdout.flush()
@@ -371,8 +440,8 @@ def create_profile():
 
     path = os.path.join(PROFILES_DIR, fname)
     if os.path.exists(path):
-        confirm = prompt_input(f"{fname} 已存在，覆盖？(y/N)").lower()
-        if confirm != "y":
+        confirm = prompt_input_esc(f"{fname} 已存在，覆盖？(y/N)")
+        if confirm is None or confirm.lower() != "y":
             return None
 
     os.makedirs(PROFILES_DIR, exist_ok=True)
@@ -424,10 +493,9 @@ def confirm_edit_profile(old_profile, new_profile, old_fname, new_fname):
         sys.stdout.write(f"  \033[93m文件名:\033[0m\n")
         sys.stdout.write(f"    \033[90m{old_fname}\033[0m \033[36m→\033[0m \033[94m{new_fname}\033[0m\n\n")
 
-    sys.stdout.write("  \033[90m按 Enter 确认修改，输入其他内容返回菜单\033[0m")
+    sys.stdout.write("  \033[90m按 Enter 确认修改，Esc 取消\033[0m")
     sys.stdout.flush()
-    confirm = input().strip().lower()
-    return confirm == ""
+    return read_char() in ("\r", "\n")
 
 
 def edit_profile(profile):
@@ -437,10 +505,8 @@ def edit_profile(profile):
     old_fname = profile.get("_file", "")
     new_profile = {}
 
-    name = prompt_input("名称", profile.get("name", ""))
+    name = prompt_input_esc("名称", profile.get("name", ""))
     if not name:
-        sys.stdout.write("\033[91m名称不能为空\033[0m\n")
-        sys.stdout.flush()
         return None
     new_profile["name"] = name
 
@@ -449,14 +515,18 @@ def edit_profile(profile):
         default = profile.get(key, "")
         if model_val and key not in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"):
             default = model_val
-        val = prompt_input(key, default)
+        val = prompt_input_esc(key, default)
+        if val is None:
+            return None
         if val:
             new_profile[key] = val
         if key == "ANTHROPIC_MODEL" and val:
             model_val = val
 
     old_base = old_fname[:-5] if old_fname.endswith(".json") else old_fname
-    fname = prompt_input("文件名", old_base)
+    fname = prompt_input_esc("文件名", old_base)
+    if fname is None:
+        return None
     if fname in (".", "..") or "/" in fname or "\\" in fname or fname != os.path.basename(fname):
         sys.stdout.write("\033[91m文件名不能包含路径或 ..\033[0m\n")
         sys.stdout.flush()
@@ -471,8 +541,8 @@ def edit_profile(profile):
 
     path = os.path.join(PROFILES_DIR, fname)
     if fname != old_fname and os.path.exists(path):
-        confirm = prompt_input(f"{fname} 已存在，覆盖？(y/N)").lower()
-        if confirm != "y":
+        confirm = prompt_input_esc(f"{fname} 已存在，覆盖？(y/N)")
+        if confirm is None or confirm.lower() != "y":
             return None
 
     os.makedirs(PROFILES_DIR, exist_ok=True)
@@ -507,19 +577,7 @@ def export_profile(profile):
     sys.stdout.write(f"  \033[90m{text}\033[0m\n\n")
     sys.stdout.write("  \033[36m按任意键返回菜单\033[0m")
     sys.stdout.flush()
-
-    if IS_WINDOWS:
-        import msvcrt
-        msvcrt.getch()
-    else:
-        import tty, termios
-        fd = sys.stdin.fileno()
-        old = termios.tcgetattr(fd)
-        try:
-            tty.setraw(fd)
-            sys.stdin.read(1)
-        finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    read_char()
 
 
 def import_from_text(text):
@@ -563,7 +621,9 @@ def import_from_text(text):
     sys.stdout.write("\n")
 
     default_fname = name.lower().replace(" ", "-") + ".json"
-    fname = prompt_input("文件名", default_fname)
+    fname = prompt_input_esc("文件名", default_fname)
+    if fname is None:
+        return None
     if fname in (".", "..") or "/" in fname or "\\" in fname or fname != os.path.basename(fname):
         sys.stdout.write("\033[91m文件名不能包含路径或 ..\033[0m\n")
         sys.stdout.flush()
@@ -573,8 +633,8 @@ def import_from_text(text):
 
     path = os.path.join(PROFILES_DIR, fname)
     if os.path.exists(path):
-        confirm = prompt_input(f"{fname} 已存在，覆盖？(y/N)").lower()
-        if confirm != "y":
+        confirm = prompt_input_esc(f"{fname} 已存在，覆盖？(y/N)")
+        if confirm is None or confirm.lower() != "y":
             return None
 
     os.makedirs(PROFILES_DIR, exist_ok=True)
