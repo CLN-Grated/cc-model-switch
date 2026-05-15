@@ -43,12 +43,12 @@ def load_profiles():
 
 
 def enter_alt_screen():
-    sys.stdout.write("\033[?1049h\033[H")
+    sys.stdout.write("\033[?1049h\033[H\033[?25l")
     sys.stdout.flush()
 
 
 def leave_alt_screen():
-    sys.stdout.write("\033[?1049l")
+    sys.stdout.write("\033[?25h\033[?1049l")
     sys.stdout.flush()
 
 
@@ -189,12 +189,18 @@ def restore_ime_mode():
 def draw_menu(profiles, index, current_index=None):
     use_ime_english_mode()
     sys.stdout.write("\033[H")
-    sys.stdout.write("\033[96m═══ Claude Code 模型切换器 ═══\033[0m\n\n")
+
+    def write_line(text=""):
+        sys.stdout.write(f"{text}\033[K\n")
+
+    write_line("\033[96m═══ Claude Code 模型切换器 ═══\033[0m")
+    write_line()
 
     if not profiles:
-        sys.stdout.write("\033[90m暂无配置文件\033[0m\n")
-        sys.stdout.write("\033[92m按 a 创建新配置文件\033[0m\n\n")
-        sys.stdout.write("\033[36ma 新增  |  q 取消\033[0m\n")
+        write_line("\033[90m暂无配置文件\033[0m")
+        write_line("\033[92m按 a 创建新配置文件\033[0m")
+        write_line()
+        write_line("\033[36ma 新增  |  q 取消\033[0m")
         sys.stdout.write("\033[J")
         sys.stdout.flush()
         return
@@ -219,12 +225,13 @@ def draw_menu(profiles, index, current_index=None):
         else:
             name = raw_name
         fname = p.get("_file", "")
-        sys.stdout.write(f"{marker} [{name}] \033[90m{fname}\033[0m\n")
-        sys.stdout.write(f"  \033[90mURL: {p.get('ANTHROPIC_BASE_URL', '-')}\033[0m\n")
-        sys.stdout.write(f"  \033[90m模型: {p.get('ANTHROPIC_MODEL', '-')}\033[0m\n\n")
+        write_line(f"{marker} [{name}] \033[90m{fname}\033[0m")
+        write_line(f"  \033[90mURL: {p.get('ANTHROPIC_BASE_URL', '-')}\033[0m")
+        write_line(f"  \033[90m模型: {p.get('ANTHROPIC_MODEL', '-')}\033[0m")
+        write_line()
     if len(profiles) > visible_count:
-        sys.stdout.write(f"\033[90m显示 {start + 1}-{end} / {len(profiles)}\033[0m\n")
-    sys.stdout.write("\033[36m↑ ↓ 切换  |  Enter 确认  |  a 新增  |  e 编辑  |  c 复制  |  q 取消  |  绿色为当前使用\033[0m\n")
+        write_line(f"\033[90m显示 {start + 1}-{end} / {len(profiles)}\033[0m")
+    write_line("\033[36m↑ ↓ 切换  |  Enter 确认  |  a 新增  |  e 编辑  |  c 复制  |  d 删除  |  q 取消  |  绿色为当前使用\033[0m")
     sys.stdout.write("\033[J")
     sys.stdout.flush()
 
@@ -257,7 +264,7 @@ def format_value(key, value):
 
 
 def confirm_profile(profile):
-    sys.stdout.write("\033[H")
+    sys.stdout.write("\033[H\033[J")
     print("\033[96m── 确认切换配置 ──\033[0m\n")
     print(f"  名称: {profile.get('name', '未知')}")
     print(f"  配置文件: {profile.get('_file', '-')}")
@@ -280,6 +287,8 @@ def read_key():
             return "ctrl-c"
         if first in (b"\r", b"\n"):
             return "enter"
+        if first == b"d":
+            return "delete"
         if first == b"q":
             return "quit"
         if first == b"c":
@@ -325,6 +334,8 @@ def read_key():
                 return "quit"
             elif ch == "\r" or ch == "\n":
                 return "enter"
+            elif ch == "d":
+                return "delete"
             elif ch == "q":
                 return "quit"
             elif ch == "c":
@@ -412,7 +423,7 @@ def confirm_esc(prompt_text=""):
 
 
 def create_profile():
-    sys.stdout.write("\033[H")
+    sys.stdout.write("\033[H\033[J")
     sys.stdout.write("\033[96m── 创建新配置文件 ──\033[0m\n\n")
     name = prompt_input_esc("名称")
     if not name:
@@ -457,7 +468,7 @@ def create_profile():
 
 def confirm_edit_profile(old_profile, new_profile, old_fname, new_fname):
     use_ime_english_mode()
-    sys.stdout.write("\033[H")
+    sys.stdout.write("\033[H\033[J")
     sys.stdout.write("\033[96m── 确认修改配置 ──\033[0m\n\n")
 
     changes = []
@@ -497,14 +508,14 @@ def confirm_edit_profile(old_profile, new_profile, old_fname, new_fname):
         sys.stdout.write(f"  \033[93m文件名:\033[0m\n")
         sys.stdout.write(f"    \033[90m{old_fname}\033[0m \033[36m→\033[0m \033[94m{new_fname}\033[0m\n\n")
 
-    sys.stdout.write("  \033[90m按 Enter 确认修改，Esc 取消\033[0m")
+    sys.stdout.write("  \033[90m按 Enter 确认修改，任意键取消\033[0m")
     sys.stdout.write("\033[J")
     sys.stdout.flush()
     return read_char() in ("\r", "\n")
 
 
 def edit_profile(profile):
-    sys.stdout.write("\033[H")
+    sys.stdout.write("\033[H\033[J")
     sys.stdout.write("\033[96m── 编辑配置文件 ──\033[0m\n\n")
 
     old_fname = profile.get("_file", "")
@@ -567,23 +578,50 @@ def edit_profile(profile):
 
 def export_profile(profile):
     use_ime_english_mode()
-    sys.stdout.write("\033[H")
+    sys.stdout.write("\033[H\033[J")
     sys.stdout.write("\033[96m── 导出配置文件 ──\033[0m\n\n")
 
     export_data = {k: v for k, v in profile.items() if k == "name" or k in ENV_KEYS}
     text = json.dumps(export_data, ensure_ascii=False, separators=(",", ":"))
 
-    try:
-        subprocess.run(["clip"], input=text, text=True, encoding="utf-8", check=True)
-        sys.stdout.write("  \033[92m已复制到剪贴板\033[0m\n\n")
-    except Exception:
-        sys.stdout.write("  \033[93m剪贴板不可用，请手动复制:\033[0m\n\n")
-
     sys.stdout.write(f"  \033[90m{text}\033[0m\n\n")
     sys.stdout.write("\033[J")
-    sys.stdout.write("  \033[36m按任意键返回菜单\033[0m")
+    sys.stdout.write("  \033[90m按 Enter 复制到剪贴板，任意键取消\033[0m")
+    sys.stdout.flush()
+    if read_char() not in ("\r", "\n"):
+        return
+
+    sys.stdout.write("\r\033[K")
+    try:
+        subprocess.run(["clip"], input=text, text=True, encoding="utf-8", check=True)
+        sys.stdout.write("  \033[92m已复制到剪贴板，按任意键返回菜单\033[0m")
+    except Exception:
+        sys.stdout.write("  \033[93m剪贴板不可用，请手动复制，按任意键返回菜单\033[0m")
     sys.stdout.flush()
     read_char()
+
+
+def delete_profile(profile):
+    use_ime_english_mode()
+    sys.stdout.write("\033[H\033[J")
+    sys.stdout.write("\033[96m── 删除配置文件 ──\033[0m\n\n")
+    sys.stdout.write(f"  \033[93m名称:\033[0m {profile.get('name', '未知')}\n")
+    sys.stdout.write(f"  \033[93m配置文件:\033[0m {profile.get('_file', '-')}\n")
+    sys.stdout.write(f"  \033[93mURL:\033[0m {profile.get('ANTHROPIC_BASE_URL', '-')}\n")
+    sys.stdout.write(f"  \033[93m模型:\033[0m {profile.get('ANTHROPIC_MODEL', '-')}\n\n")
+    sys.stdout.write("  \033[91m此操作不可恢复\033[0m\n\n")
+    sys.stdout.write("\033[J")
+    sys.stdout.write("  \033[90m按 Enter 确认删除，任意键取消\033[0m")
+    sys.stdout.flush()
+    if read_char() not in ("\r", "\n"):
+        return False
+    try:
+        os.remove(os.path.join(PROFILES_DIR, profile.get("_file", "")))
+        return True
+    except OSError as e:
+        sys.stdout.write(f"\033[91m删除失败: {e}\033[0m\n")
+        sys.stdout.flush()
+        return False
 
 
 def import_from_text(text):
@@ -618,7 +656,7 @@ def import_from_text(text):
         sys.stdout.flush()
         return None
 
-    sys.stdout.write("\033[H")
+    sys.stdout.write("\033[H\033[J")
     sys.stdout.write("\033[96m── 导入配置文件 ──\033[0m\n\n")
     sys.stdout.write(f"  \033[93m名称:\033[0m {name}\n")
     for key in ENV_KEYS:
@@ -734,6 +772,14 @@ def main():
                 profiles = load_profiles()
                 current_idx = next((i for i, p in enumerate(profiles) if all(current.get(k) == p.get(k) for k in keys)), None)
                 idx = next((i for i, p in enumerate(profiles) if p.get("_file") == result), 0)
+            draw_menu(profiles, idx, current_idx)
+        elif key == "delete":
+            if not profiles:
+                continue
+            if delete_profile(profiles[idx]):
+                profiles = load_profiles()
+                current_idx = next((i for i, p in enumerate(profiles) if all(current.get(k) == p.get(k) for k in keys)), None)
+                idx = min(idx, len(profiles) - 1) if profiles else 0
             draw_menu(profiles, idx, current_idx)
 
     if not profiles:
