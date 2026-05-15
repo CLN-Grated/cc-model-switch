@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import sys
 
 def get_app_dir():
@@ -14,6 +15,7 @@ SETTINGS_PATH = os.path.join(os.path.expanduser("~"), ".claude", "settings.json"
 
 IS_WINDOWS = os.name == "nt"
 IME_PREVIOUS_STATE = None
+_paste_buf = ""
 
 ENV_KEYS = [
     "ANTHROPIC_BASE_URL",
@@ -192,7 +194,7 @@ def draw_menu(profiles, index, current_index=None):
     if not profiles:
         sys.stdout.write("\033[90m暂无配置文件\033[0m\n")
         sys.stdout.write("\033[92m按 a 创建新配置文件\033[0m\n\n")
-        sys.stdout.write("\033[36ma 新增  |  Ctrl+C / q 取消\033[0m\n")
+        sys.stdout.write("\033[36ma 新增  |  q 取消\033[0m\n")
         sys.stdout.flush()
         return
 
@@ -221,7 +223,7 @@ def draw_menu(profiles, index, current_index=None):
         sys.stdout.write(f"  \033[90m模型: {p.get('ANTHROPIC_MODEL', '-')}\033[0m\n\n")
     if len(profiles) > visible_count:
         sys.stdout.write(f"\033[90m显示 {start + 1}-{end} / {len(profiles)}\033[0m\n")
-    sys.stdout.write("\033[36m↑ ↓ 切换  |  Enter 确认  |  a 新增  |  e 编辑  |  Ctrl+C / q 取消  |  绿色为当前使用\033[0m\n")
+    sys.stdout.write("\033[36m↑ ↓ 切换  |  Enter 确认  |  a 新增  |  e 编辑  |  c 复制  |  q 取消  |  绿色为当前使用\033[0m\n")
     sys.stdout.flush()
 
 
@@ -277,16 +279,28 @@ def read_key():
             return "enter"
         if first == b"q":
             return "quit"
+        if first == b"c":
+            return "copy"
         if first == b"e":
             return "edit"
         if first == b"a":
             return "add"
+        if first == b"v":
+            return "paste"
         if first == b"\xe0":
             second = msvcrt.getch()
             if second == b"H":
                 return "up"
             elif second == b"P":
                 return "down"
+        # Paste detection: JSON object start + chars arriving in batch
+        if first == b"{" and msvcrt.kbhit():
+            global _paste_buf
+            buf = bytearray(first)
+            while msvcrt.kbhit():
+                buf.extend(msvcrt.getch())
+            _paste_buf = buf.decode("utf-8", errors="replace")
+            return "paste"
         return "unknown"
     else:
         import tty, termios
@@ -306,10 +320,14 @@ def read_key():
                 return "enter"
             elif ch == "q":
                 return "quit"
+            elif ch == "c":
+                return "copy"
             elif ch == "a":
                 return "add"
             elif ch == "e":
                 return "edit"
+            elif ch == "v":
+                return "paste"
             elif ch == "\x03":
                 return "ctrl-c"
             return "unknown"
@@ -472,6 +490,101 @@ def edit_profile(profile):
     return fname, old_fname
 
 
+def export_profile(profile):
+    use_ime_english_mode()
+    sys.stdout.write("\033[H\033[J")
+    sys.stdout.write("\033[96m── 导出配置文件 ──\033[0m\n\n")
+
+    export_data = {k: v for k, v in profile.items() if k == "name" or k in ENV_KEYS}
+    text = json.dumps(export_data, ensure_ascii=False, separators=(",", ":"))
+
+    try:
+        subprocess.run(["clip"], input=text, text=True, encoding="utf-8", check=True)
+        sys.stdout.write("  \033[92m已复制到剪贴板\033[0m\n\n")
+    except Exception:
+        sys.stdout.write("  \033[93m剪贴板不可用，请手动复制:\033[0m\n\n")
+
+    sys.stdout.write(f"  \033[90m{text}\033[0m\n\n")
+    sys.stdout.write("  \033[36m按任意键返回菜单\033[0m")
+    sys.stdout.flush()
+
+    if IS_WINDOWS:
+        import msvcrt
+        msvcrt.getch()
+    else:
+        import tty, termios
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            sys.stdin.read(1)
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def import_from_text(text):
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        sys.stdout.write(f"\033[91mJSON 解析失败: {e}\033[0m\n")
+        sys.stdout.flush()
+        return None
+
+    if not isinstance(data, dict):
+        sys.stdout.write("\033[91m无效格式: 需要 JSON 对象\033[0m\n")
+        sys.stdout.flush()
+        return None
+
+    name = data.get("name", "").strip()
+    if not name:
+        sys.stdout.write("\033[91m缺少 name 字段\033[0m\n")
+        sys.stdout.flush()
+        return None
+
+    profile = {"name": name}
+    has_env = False
+    for key in ENV_KEYS:
+        val = data.get(key)
+        if val and isinstance(val, str) and val.strip():
+            profile[key] = val.strip()
+            has_env = True
+
+    if not has_env:
+        sys.stdout.write("\033[91m未检测到有效的环境变量字段\033[0m\n")
+        sys.stdout.flush()
+        return None
+
+    sys.stdout.write("\033[H\033[J")
+    sys.stdout.write("\033[96m── 导入配置文件 ──\033[0m\n\n")
+    sys.stdout.write(f"  \033[93m名称:\033[0m {name}\n")
+    for key in ENV_KEYS:
+        if key in profile:
+            sys.stdout.write(f"  \033[93m{key}:\033[0m {format_value(key, profile[key])}\n")
+    sys.stdout.write("\n")
+
+    default_fname = name.lower().replace(" ", "-") + ".json"
+    fname = prompt_input("文件名", default_fname)
+    if fname in (".", "..") or "/" in fname or "\\" in fname or fname != os.path.basename(fname):
+        sys.stdout.write("\033[91m文件名不能包含路径或 ..\033[0m\n")
+        sys.stdout.flush()
+        return None
+    if not fname.endswith(".json"):
+        fname += ".json"
+
+    path = os.path.join(PROFILES_DIR, fname)
+    if os.path.exists(path):
+        confirm = prompt_input(f"{fname} 已存在，覆盖？(y/N)").lower()
+        if confirm != "y":
+            return None
+
+    os.makedirs(PROFILES_DIR, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(profile, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+
+    return fname
+
+
 def main():
     profiles = load_profiles()
 
@@ -531,6 +644,28 @@ def main():
                 profiles = load_profiles()
                 current_idx = next((i for i, p in enumerate(profiles) if all(current.get(k) == p.get(k) for k in keys)), None)
                 idx = next((i for i, p in enumerate(profiles) if p.get("_file") == new_fname), 0)
+            draw_menu(profiles, idx, current_idx)
+        elif key == "copy":
+            if not profiles:
+                continue
+            export_profile(profiles[idx])
+            draw_menu(profiles, idx, current_idx)
+        elif key == "paste":
+            global _paste_buf
+            if _paste_buf:
+                result = import_from_text(_paste_buf)
+                _paste_buf = ""
+            else:
+                try:
+                    r = subprocess.run(["powershell", "-NoProfile", "-Command", "Get-Clipboard"],
+                                       capture_output=True, text=True, encoding="utf-8", timeout=5)
+                    result = import_from_text(r.stdout.strip()) if r.returncode == 0 else None
+                except Exception:
+                    result = None
+            if result is not None:
+                profiles = load_profiles()
+                current_idx = next((i for i, p in enumerate(profiles) if all(current.get(k) == p.get(k) for k in keys)), None)
+                idx = next((i for i, p in enumerate(profiles) if p.get("_file") == result), 0)
             draw_menu(profiles, idx, current_idx)
 
     if not profiles:
