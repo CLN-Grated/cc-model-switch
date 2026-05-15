@@ -188,13 +188,14 @@ def restore_ime_mode():
 
 def draw_menu(profiles, index, current_index=None):
     use_ime_english_mode()
-    sys.stdout.write("\033[H\033[J")
+    sys.stdout.write("\033[H")
     sys.stdout.write("\033[96m═══ Claude Code 模型切换器 ═══\033[0m\n\n")
 
     if not profiles:
         sys.stdout.write("\033[90m暂无配置文件\033[0m\n")
         sys.stdout.write("\033[92m按 a 创建新配置文件\033[0m\n\n")
         sys.stdout.write("\033[36ma 新增  |  q 取消\033[0m\n")
+        sys.stdout.write("\033[J")
         sys.stdout.flush()
         return
 
@@ -224,6 +225,7 @@ def draw_menu(profiles, index, current_index=None):
     if len(profiles) > visible_count:
         sys.stdout.write(f"\033[90m显示 {start + 1}-{end} / {len(profiles)}\033[0m\n")
     sys.stdout.write("\033[36m↑ ↓ 切换  |  Enter 确认  |  a 新增  |  e 编辑  |  c 复制  |  q 取消  |  绿色为当前使用\033[0m\n")
+    sys.stdout.write("\033[J")
     sys.stdout.flush()
 
 
@@ -255,7 +257,7 @@ def format_value(key, value):
 
 
 def confirm_profile(profile):
-    sys.stdout.write("\033[H\033[J")
+    sys.stdout.write("\033[H")
     print("\033[96m── 确认切换配置 ──\033[0m\n")
     print(f"  名称: {profile.get('name', '未知')}")
     print(f"  配置文件: {profile.get('_file', '-')}")
@@ -264,6 +266,7 @@ def confirm_profile(profile):
     for key in ENV_KEYS:
         print(f"    {key}: {format_value(key, profile.get(key))}")
     sys.stdout.write("\n  \033[90m按 Enter 确认切换，其他键取消\033[0m")
+    sys.stdout.write("\033[J")
     sys.stdout.flush()
     return read_char() in ("\r", "\n")
 
@@ -409,7 +412,7 @@ def confirm_esc(prompt_text=""):
 
 
 def create_profile():
-    sys.stdout.write("\033[H\033[J")
+    sys.stdout.write("\033[H")
     sys.stdout.write("\033[96m── 创建新配置文件 ──\033[0m\n\n")
     name = prompt_input_esc("名称")
     if not name:
@@ -454,7 +457,7 @@ def create_profile():
 
 def confirm_edit_profile(old_profile, new_profile, old_fname, new_fname):
     use_ime_english_mode()
-    sys.stdout.write("\033[H\033[J")
+    sys.stdout.write("\033[H")
     sys.stdout.write("\033[96m── 确认修改配置 ──\033[0m\n\n")
 
     changes = []
@@ -473,6 +476,7 @@ def confirm_edit_profile(old_profile, new_profile, old_fname, new_fname):
 
     if not changes and not fname_changed:
         sys.stdout.write("  \033[90m未检测到变更\033[0m\n\n")
+        sys.stdout.write("\033[J")
         sys.stdout.flush()
         return True
 
@@ -494,12 +498,13 @@ def confirm_edit_profile(old_profile, new_profile, old_fname, new_fname):
         sys.stdout.write(f"    \033[90m{old_fname}\033[0m \033[36m→\033[0m \033[94m{new_fname}\033[0m\n\n")
 
     sys.stdout.write("  \033[90m按 Enter 确认修改，Esc 取消\033[0m")
+    sys.stdout.write("\033[J")
     sys.stdout.flush()
     return read_char() in ("\r", "\n")
 
 
 def edit_profile(profile):
-    sys.stdout.write("\033[H\033[J")
+    sys.stdout.write("\033[H")
     sys.stdout.write("\033[96m── 编辑配置文件 ──\033[0m\n\n")
 
     old_fname = profile.get("_file", "")
@@ -562,7 +567,7 @@ def edit_profile(profile):
 
 def export_profile(profile):
     use_ime_english_mode()
-    sys.stdout.write("\033[H\033[J")
+    sys.stdout.write("\033[H")
     sys.stdout.write("\033[96m── 导出配置文件 ──\033[0m\n\n")
 
     export_data = {k: v for k, v in profile.items() if k == "name" or k in ENV_KEYS}
@@ -575,6 +580,7 @@ def export_profile(profile):
         sys.stdout.write("  \033[93m剪贴板不可用，请手动复制:\033[0m\n\n")
 
     sys.stdout.write(f"  \033[90m{text}\033[0m\n\n")
+    sys.stdout.write("\033[J")
     sys.stdout.write("  \033[36m按任意键返回菜单\033[0m")
     sys.stdout.flush()
     read_char()
@@ -612,13 +618,15 @@ def import_from_text(text):
         sys.stdout.flush()
         return None
 
-    sys.stdout.write("\033[H\033[J")
+    sys.stdout.write("\033[H")
     sys.stdout.write("\033[96m── 导入配置文件 ──\033[0m\n\n")
     sys.stdout.write(f"  \033[93m名称:\033[0m {name}\n")
     for key in ENV_KEYS:
         if key in profile:
             sys.stdout.write(f"  \033[93m{key}:\033[0m {format_value(key, profile[key])}\n")
     sys.stdout.write("\n")
+    sys.stdout.write("\033[J")
+    sys.stdout.flush()
 
     default_fname = name.lower().replace(" ", "-") + ".json"
     fname = prompt_input_esc("文件名", default_fname)
