@@ -19,6 +19,7 @@ _paste_buf = ""
 
 ENV_KEYS = [
     "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
     "ANTHROPIC_MODEL",
     "ANTHROPIC_REASONING_MODEL",
@@ -253,6 +254,26 @@ def draw_menu(profiles, index, current_index=None, status=None):
 
 
 def apply_profile(profile):
+    api_key = profile.get("ANTHROPIC_API_KEY")
+    auth_token = profile.get("ANTHROPIC_AUTH_TOKEN")
+    if api_key and auth_token:
+        print("\n\033[93m⚠ 认证方式冲突，请选择一个保留:\033[0m")
+        print(f"  1) ANTHROPIC_AUTH_TOKEN: {format_value('TOKEN', auth_token)}")
+        print(f"  2) ANTHROPIC_API_KEY:   {format_value('KEY', api_key)}")
+        while True:
+            try:
+                ch = input("  \033[90m请选择 1/2: \033[0m").strip()
+            except (EOFError, KeyboardInterrupt):
+                ch = "1"
+            if ch == "1":
+                profile.pop("ANTHROPIC_API_KEY", None)
+                print("  \033[92m已保留 ANTHROPIC_AUTH_TOKEN\033[0m\n")
+                break
+            elif ch == "2":
+                profile.pop("ANTHROPIC_AUTH_TOKEN", None)
+                print("  \033[92m已保留 ANTHROPIC_API_KEY\033[0m\n")
+                break
+
     with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
         data = json.load(f)
 
@@ -277,6 +298,32 @@ def format_value(key, value):
             return "*" * len(value)
         return f"{value[:4]}...{value[-4:]}"
     return value
+
+
+def resolve_auth_conflict(profile):
+    api_key = profile.get("ANTHROPIC_API_KEY")
+    auth_token = profile.get("ANTHROPIC_AUTH_TOKEN")
+    if not (api_key and auth_token):
+        return False
+
+    sys.stdout.write("\n")
+    sys.stdout.write("  \033[93m⚠ 认证方式冲突\033[0m\n")
+    sys.stdout.write(f"    1) ANTHROPIC_AUTH_TOKEN: {format_value('TOKEN', auth_token)}\n")
+    sys.stdout.write(f"    2) ANTHROPIC_API_KEY:   {format_value('KEY', api_key)}\n")
+    sys.stdout.write("  \033[90m只能保留一个，请选择 1/2: \033[0m")
+    sys.stdout.flush()
+    while True:
+        ch = read_char()
+        if ch == "1":
+            del profile["ANTHROPIC_API_KEY"]
+            sys.stdout.write("1\n  \033[92m已保留 AUTH_TOKEN\033[0m\n")
+            break
+        elif ch == "2":
+            del profile["ANTHROPIC_AUTH_TOKEN"]
+            sys.stdout.write("2\n  \033[92m已保留 API_KEY\033[0m\n")
+            break
+    sys.stdout.flush()
+    return True
 
 
 def truncate_display(value, max_width):
@@ -460,7 +507,7 @@ def create_profile():
     profile = {"name": name}
     model_val = ""
     for key in ENV_KEYS:
-        default = model_val if model_val and key not in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN") else ""
+        default = model_val if model_val and key not in ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN") else ""
         val = prompt_input_esc(key, default)
         if val is None:
             return None
@@ -468,6 +515,8 @@ def create_profile():
             profile[key] = val
         if key == "ANTHROPIC_MODEL" and val:
             model_val = val
+
+    resolve_auth_conflict(profile)
 
     default_fname = name.lower().replace(" ", "-") + ".json"
     fname = prompt_input_esc("文件名", default_fname)
@@ -558,7 +607,7 @@ def edit_profile(profile):
     model_val = ""
     for key in ENV_KEYS:
         default = profile.get(key, "")
-        if model_val and key not in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"):
+        if model_val and key not in ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
             default = model_val
         val = prompt_input_esc(key, default)
         if val is None:
@@ -567,6 +616,8 @@ def edit_profile(profile):
             new_profile[key] = val
         if key == "ANTHROPIC_MODEL" and val:
             model_val = val
+
+    resolve_auth_conflict(new_profile)
 
     old_base = old_fname[:-5] if old_fname.endswith(".json") else old_fname
     fname = prompt_input_esc("文件名", old_base)
@@ -678,6 +729,9 @@ def import_from_text(text, quiet=False):
 
     if not has_env:
         return None, None if quiet else "未检测到有效的环境变量字段"
+
+    if not quiet:
+        resolve_auth_conflict(profile)
 
     sys.stdout.write("\033[H\033[J")
     sys.stdout.write("\033[96m── 导入配置文件 ──\033[0m\n")
