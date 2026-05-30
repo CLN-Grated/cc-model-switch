@@ -29,6 +29,37 @@ def read_project_metadata(project_dir):
         return tomllib.load(f).get("project", {})
 
 
+def write_entry_version(entry_file, app_version):
+    version = app_version or "unknown"
+    replacement_body = f"APP_VERSION = {version!r}"
+
+    with entry_file.open("r", encoding="utf-8", newline="") as f:
+        lines = f.readlines()
+
+    for index, line in enumerate(lines):
+        body = line
+        newline = ""
+        if body.endswith("\r\n"):
+            body = body[:-2]
+            newline = "\r\n"
+        elif body.endswith("\n"):
+            body = body[:-1]
+            newline = "\n"
+        elif body.endswith("\r"):
+            body = body[:-1]
+            newline = "\r"
+
+        if body.startswith("APP_VERSION = "):
+            replacement = f"{replacement_body}{newline}"
+            if replacement != line:
+                lines[index] = replacement
+                with entry_file.open("w", encoding="utf-8", newline="") as f:
+                    f.writelines(lines)
+            return
+
+    raise RuntimeError(f"找不到 APP_VERSION 常量: {entry_file}")
+
+
 def write_windows_version_file(
     build_dir,
     app_name,
@@ -139,6 +170,8 @@ if __name__ == "__main__":
     )
     if version_file is not None:
         pyinstaller_options.extend(["--version-file", str(version_file)])
+
+    write_entry_version(entry_file, app_version)
 
     command = [
         sys.executable,

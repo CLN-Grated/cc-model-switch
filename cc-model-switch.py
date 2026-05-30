@@ -3,6 +3,9 @@ import os
 import subprocess
 import sys
 
+APP_VERSION = "unknown"
+
+
 def get_app_dir():
     if getattr(sys, "frozen", False):
         return os.path.dirname(sys.executable)
@@ -27,6 +30,31 @@ ENV_KEYS = [
     "ANTHROPIC_DEFAULT_SONNET_MODEL",
     "ANTHROPIC_DEFAULT_OPUS_MODEL",
 ]
+
+
+def get_app_version():
+    if getattr(sys, "frozen", False):
+        return APP_VERSION or "unknown"
+
+    try:
+        import tomllib
+        pyproject_path = os.path.join(APP_DIR, "pyproject.toml")
+        with open(pyproject_path, "rb") as f:
+            version = tomllib.load(f).get("project", {}).get("version", "")
+        return version or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def format_app_version():
+    version = get_app_version()
+    if version == "unknown":
+        return "unknown version"
+    return f"v{version}"
+
+
+def should_print_version(argv):
+    return any(arg in ("--version", "-V") for arg in argv[1:])
 
 
 def load_profiles():
@@ -203,6 +231,7 @@ def draw_menu(profiles, index, current_index=None, status=None):
         width = 80
 
     write_line("\033[96m═══ Claude Code 模型切换器 ═══\033[0m")
+    write_line(f"\033[90m{format_app_version()}\033[0m")
     write_line()
 
     if not profiles:
@@ -354,39 +383,38 @@ def read_key():
     use_ime_english_mode()
     if IS_WINDOWS:
         import msvcrt
-        first = msvcrt.getch()
-        if first in (b"\x03",):
+        first = msvcrt.getwch()
+        if first == "\x03":
             return "ctrl-c"
-        if first in (b"\r", b"\n"):
+        if first in ("\r", "\n"):
             return "enter"
         lower = first.lower()
-        if lower == b"d":
+        if lower == "d":
             return "delete"
-        if lower == b"q":
+        if lower == "q":
             return "quit"
-        if lower == b"c":
+        if lower == "c":
             return "copy"
-        if lower == b"e":
+        if lower == "e":
             return "edit"
-        if lower == b"a":
+        if lower == "a":
             return "add"
-        if lower == b"v":
+        if lower == "v":
             return "paste"
-        if first == b"\x1b":
+        if first == "\x1b":
             return "quit"
-        if first == b"\xe0":
-            second = msvcrt.getch()
-            if second == b"H":
+        if first in ("\x00", "\xe0"):
+            second = msvcrt.getwch()
+            if second == "H":
                 return "up"
-            elif second == b"P":
+            elif second == "P":
                 return "down"
-        # Paste detection: JSON object start + chars arriving in batch
-        if first == b"{" and msvcrt.kbhit():
+        if first == "{" and msvcrt.kbhit():
             global _paste_buf
-            buf = bytearray(first)
+            buf = [first]
             while msvcrt.kbhit():
-                buf.extend(msvcrt.getch())
-            _paste_buf = buf.decode("utf-8", errors="replace")
+                buf.append(msvcrt.getwch())
+            _paste_buf = "".join(buf)
             return "paste"
         return "unknown"
     else:
@@ -430,16 +458,13 @@ def read_key():
 def read_char():
     if IS_WINDOWS:
         import msvcrt
-        ch = msvcrt.getch()
-        if ch == b"\xe0":
-            msvcrt.getch()
-            return None
-        if ch == b"\x03":
+        ch = msvcrt.getwch()
+        if ch == "\x03":
             raise KeyboardInterrupt
-        try:
-            return ch.decode("utf-8")
-        except UnicodeDecodeError:
-            return ch.decode("utf-8", errors="replace")
+        if ch in ("\x00", "\xe0"):
+            msvcrt.getwch()
+            return None
+        return ch
     else:
         import tty, termios
         fd = sys.stdin.fileno()
@@ -463,7 +488,7 @@ def read_char():
 
 def prompt_input_esc(label, default=""):
     hint = f" [{default}]" if default else ""
-    sys.stdout.write(f"  {label}{hint}: ")
+    sys.stdout.write(f"\033[?25h  {label}{hint}: ")
     sys.stdout.flush()
     buf = ""
     while True:
@@ -473,6 +498,8 @@ def prompt_input_esc(label, default=""):
         if ch in ("\r", "\n"):
             break
         if ch == "\x1b":
+            sys.stdout.write("\033[?25l")
+            sys.stdout.flush()
             return None
         if ch in ("\x7f", "\x08"):
             if buf:
@@ -483,7 +510,7 @@ def prompt_input_esc(label, default=""):
             buf += ch
             sys.stdout.write(ch)
             sys.stdout.flush()
-    sys.stdout.write("\n")
+    sys.stdout.write("\n\033[?25l")
     sys.stdout.flush()
     return buf if buf else default
 
@@ -880,6 +907,10 @@ def main():
 
 
 if __name__ == "__main__":
+    if should_print_version(sys.argv):
+        print(f"cc-model-switch {format_app_version()}")
+        sys.exit(0)
+
     try:
         main()
     except KeyboardInterrupt:
