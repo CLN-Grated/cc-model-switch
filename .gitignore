@@ -182,3 +182,4 @@ cython_debug/
 
 # cc-model-switch
 profiles/
+cpa_cms_auth.json

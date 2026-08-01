@@ -15,6 +15,7 @@ def get_app_dir():
 APP_DIR = get_app_dir()
 PROFILES_DIR = os.path.join(APP_DIR, "profiles")
 SETTINGS_PATH = os.path.join(os.path.expanduser("~"), ".claude", "settings.json")
+CPA_CONFIG_PATH = os.path.join(APP_DIR, "cpa_cms_auth.json")
 
 IS_WINDOWS = os.name == "nt"
 IME_PREVIOUS_STATE = None
@@ -69,6 +70,27 @@ def load_profiles():
                 data["_file"] = f
                 profiles.append(data)
     return profiles
+
+
+def load_cpa_config():
+    """加载 CPA 认证配置，文件不存在或无效时返回 None。"""
+    if not os.path.isfile(CPA_CONFIG_PATH):
+        return None
+    try:
+        with open(CPA_CONFIG_PATH, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        if "cpa_base_url" in config and "cpa_key" in config:
+            return config
+        return None
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def save_cpa_config(cpa_base_url, cpa_key):
+    """保存 CPA 认证配置到磁盘。"""
+    with open(CPA_CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump({"cpa_base_url": cpa_base_url, "cpa_key": cpa_key}, f, indent=2, ensure_ascii=False)
+        f.write("\n")
 
 
 def enter_alt_screen():
@@ -276,7 +298,7 @@ def draw_menu(profiles, index, current_index=None, status=None):
         write_line(f"\033[90m显示 {start + 1}-{end} / {len(profiles)}\033[0m")
     if status:
         write_line(f"\033[90m{truncate_display(status, max(8, width - 1))}\033[0m")
-    footer = truncate_display("↑ ↓ 切换  |  Enter 确认  |  a 新增  |  e 编辑  |  c 复制  |  d 删除  |  v 导入  |  q 取消", max(8, width - 1))
+    footer = truncate_display("↑ ↓ 切换  |  Enter 确认  |  a 新增  |  e 编辑  |  c 复制  |  d 删除  |  v 导入  |  f CPA  |  q 取消", max(8, width - 1))
     write_line(f"\033[36m{footer}\033[0m")
     sys.stdout.write("\033[J")
     sys.stdout.flush()
@@ -401,6 +423,8 @@ def read_key():
             return "add"
         if lower == "v":
             return "paste"
+        if lower == "f":
+            return "cpa"
         if first == "\x1b":
             return "quit"
         if first in ("\x00", "\xe0"):
@@ -450,6 +474,8 @@ def read_key():
                 return "edit"
             elif ch == "v":
                 return "paste"
+            elif ch == "f":
+                return "cpa"
             return "unknown"
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
@@ -487,32 +513,40 @@ def read_char():
 
 
 def prompt_input_esc(label, default=""):
-    hint = f" [{default}]" if default else ""
-    sys.stdout.write(f"\033[?25h  {label}{hint}: ")
-    sys.stdout.flush()
-    buf = ""
-    while True:
-        ch = read_char()
-        if ch is None:
-            continue
-        if ch in ("\r", "\n"):
-            break
-        if ch == "\x1b":
-            sys.stdout.write("\033[?25l")
-            sys.stdout.flush()
-            return None
-        if ch in ("\x7f", "\x08"):
-            if buf:
-                buf = buf[:-1]
-                sys.stdout.write("\b \b")
+    """文本输入，支持中文与 Esc 取消。"""
+    if IS_WINDOWS:
+        restore_ime_mode()
+    try:
+        hint = f" [{default}]" if default else ""
+        sys.stdout.write(f"\033[?25h  {label}{hint}: ")
+        sys.stdout.flush()
+        buf = ""
+        while True:
+            ch = read_char()
+            if ch is None:
+                continue
+            if ch in ("\r", "\n"):
+                break
+            if ch == "\x1b":
+                sys.stdout.write("\033[?25l")
                 sys.stdout.flush()
-        else:
-            buf += ch
-            sys.stdout.write(ch)
-            sys.stdout.flush()
-    sys.stdout.write("\n\033[?25l")
-    sys.stdout.flush()
-    return buf if buf else default
+                return None
+            if ch in ("\x7f", "\x08"):
+                if buf:
+                    buf = buf[:-1]
+                    sys.stdout.write("\b \b")
+                    sys.stdout.flush()
+            else:
+                buf += ch
+                # 用 buffer.write 直接输出 UTF-8 字节，规避 stdout 默认编码导致的 CJK 乱码
+                sys.stdout.buffer.write(ch.encode("utf-8", errors="replace"))
+                sys.stdout.buffer.flush()
+        sys.stdout.write("\n\033[?25l")
+        sys.stdout.flush()
+        return buf if buf else default
+    finally:
+        if IS_WINDOWS:
+            use_ime_english_mode()
 
 
 def confirm_esc(prompt_text=""):
@@ -545,16 +579,15 @@ def create_profile():
 
     resolve_auth_conflict(profile)
 
-    default_fname = name.lower().replace(" ", "-") + ".json"
+    default_fname = name.lower().replace(" ", "-")
     fname = prompt_input_esc("文件名", default_fname)
     if fname is None:
         return None
-    if fname in (".", "..") or "/" in fname or "\\" in fname or fname != os.path.basename(fname):
-        sys.stdout.write("\033[91m文件名不能包含路径或 ..\033[0m\n")
+    fname, err = sanitize_filename(fname)
+    if err:
+        sys.stdout.write(f"\033[91m{err}\033[0m\n")
         sys.stdout.flush()
         return None
-    if not fname.endswith(".json"):
-        fname += ".json"
 
     path = os.path.join(PROFILES_DIR, fname)
     if os.path.exists(path):
@@ -646,16 +679,15 @@ def edit_profile(profile):
 
     resolve_auth_conflict(new_profile)
 
-    old_base = old_fname[:-5] if old_fname.endswith(".json") else old_fname
+    old_base = os.path.splitext(old_fname)[0]
     fname = prompt_input_esc("文件名", old_base)
     if fname is None:
         return None
-    if fname in (".", "..") or "/" in fname or "\\" in fname or fname != os.path.basename(fname):
-        sys.stdout.write("\033[91m文件名不能包含路径或 ..\033[0m\n")
+    fname, err = sanitize_filename(fname)
+    if err:
+        sys.stdout.write(f"\033[91m{err}\033[0m\n")
         sys.stdout.flush()
         return None
-    if not fname.endswith(".json"):
-        fname += ".json"
     if fname.lower() == old_fname.lower():
         fname = old_fname
 
@@ -711,6 +743,18 @@ def export_profile(profile):
     return status
 
 
+def sanitize_filename(name):
+    """处理文件名：去除空格、自动补 .json、验证安全性。返回 (safe_name, error_msg)。"""
+    name = name.strip()
+    if not name:
+        return None, "文件名不能为空"
+    if name in (".", "..") or "/" in name or "\\" in name or name != os.path.basename(name):
+        return None, "文件名不能包含路径或 .."
+    if not name.endswith(".json"):
+        name += ".json"
+    return name, None
+
+
 def delete_profile(profile):
     use_ime_english_mode()
     sys.stdout.write("\033[H\033[J")
@@ -731,6 +775,63 @@ def delete_profile(profile):
         return True, f"已删除: {fname}"
     except OSError as e:
         return False, f"删除失败: {e}"
+
+
+def cpa_quick_switch():
+    """CPA 快速切换：只需输入模型 ID，无需配置文件。"""
+    sys.stdout.write("\033[H\033[J")
+    sys.stdout.write("\033[96m── CPA 快速切换 ──\033[0m\n\n")
+
+    cpa_config = load_cpa_config()
+    if cpa_config is None:
+        sys.stdout.write("  \033[93m未检测到 CPA 配置，请先设置:\033[0m\n\n")
+        cpa_base_url = prompt_input_esc("CPA 地址")
+        if cpa_base_url is None:
+            return None
+        cpa_key = prompt_input_esc("CPA Key")
+        if cpa_key is None:
+            return None
+        save_cpa_config(cpa_base_url, cpa_key)
+        cpa_config = {"cpa_base_url": cpa_base_url, "cpa_key": cpa_key}
+        sys.stdout.write("\n  \033[92mCPA 配置已保存\033[0m\n\n")
+        sys.stdout.flush()
+
+    sys.stdout.write(f"  \033[90mCPA 地址: {cpa_config['cpa_base_url']}\033[0m\n")
+    sys.stdout.write(f"  \033[90mCPA Key:   {format_value('KEY', cpa_config['cpa_key'])}\033[0m\n\n")
+    sys.stdout.write("\033[90mEnter 保持默认，Esc 取消\033[0m\n\n")
+
+    model_id = prompt_input_esc("ANTHROPIC_MODEL（如 gpt-5.5[1m]）")
+    if model_id is None:
+        return None
+
+    profile = {
+        "name": f"CPA - {model_id}",
+        "ANTHROPIC_BASE_URL": cpa_config["cpa_base_url"],
+        "ANTHROPIC_AUTH_TOKEN": cpa_config["cpa_key"],
+        "ANTHROPIC_MODEL": model_id,
+    }
+
+    for key in ("ANTHROPIC_REASONING_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+                "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL"):
+        val = prompt_input_esc(key, model_id)
+        if val is None:
+            return None
+        if val:
+            profile[key] = val
+
+    sys.stdout.write("\n  \033[96m── 确认切换 ──\033[0m\n\n")
+    sys.stdout.write(f"  名称: \033[92m{profile['name']}\033[0m\n")
+    sys.stdout.write(f"  URL:  \033[90m{cpa_config['cpa_base_url']}\033[0m\n")
+    sys.stdout.write(f"  写入: \033[90m{SETTINGS_PATH}\033[0m\n\n")
+    sys.stdout.write("  将应用的环境变量:\n")
+    for key in ENV_KEYS:
+        sys.stdout.write(f"    {key}: {format_value(key, profile.get(key))}\n")
+    sys.stdout.write("\n  \033[90m按 Enter 确认，任意键取消\033[0m")
+    sys.stdout.write("\033[J")
+    sys.stdout.flush()
+    if read_char() not in ("\r", "\n"):
+        return None
+    return profile
 
 
 def import_from_text(text, quiet=False):
@@ -771,14 +872,13 @@ def import_from_text(text, quiet=False):
     sys.stdout.write("\033[J")
     sys.stdout.flush()
 
-    default_fname = name.lower().replace(" ", "-") + ".json"
+    default_fname = name.lower().replace(" ", "-")
     fname = prompt_input_esc("文件名", default_fname)
     if fname is None:
         return None, "导入已取消"
-    if fname in (".", "..") or "/" in fname or "\\" in fname or fname != os.path.basename(fname):
-        return None, "文件名不能包含路径或 .."
-    if not fname.endswith(".json"):
-        fname += ".json"
+    fname, err = sanitize_filename(fname)
+    if err:
+        return None, err
 
     path = os.path.join(PROFILES_DIR, fname)
     if os.path.exists(path):
@@ -889,11 +989,19 @@ def main():
                     current_idx = next((i for i, p in enumerate(profiles) if all(current.get(k) == p.get(k) for k in keys)), None)
                     idx = min(idx, len(profiles) - 1) if profiles else 0
                 draw_menu(profiles, idx, current_idx, status)
+            elif key == "cpa":
+                profile = cpa_quick_switch()
+                if profile:
+                    break
+                else:
+                    draw_menu(profiles, idx, current_idx, "已取消 CPA 切换")
+                    continue
 
         if not profiles:
             sys.exit(0)
 
-        profile = profiles[idx]
+        if key != "cpa":
+            profile = profiles[idx]
     finally:
         restore_ime_mode()
         leave_alt_screen()
